@@ -27,6 +27,7 @@ jobs:
     # Dependabot's actor also gets no secrets, so its request can't authenticate —
     # skip it too (the coding-policy cron poll reviews dependabot PRs instead).
     if: >-
+      github.repository_owner == 'jbaruch' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest

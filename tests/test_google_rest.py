@@ -380,3 +380,75 @@ def test_api_bases_does_not_mutate_the_default_table(google_rest, monkeypatch):
     google_rest.api_bases()
 
     assert google_rest.DEFAULT_API_BASES["gmail"] == "https://gmail.googleapis.com/gmail/v1"
+
+
+@pytest.fixture
+def selected_connections(tmp_path, monkeypatch):
+    path = tmp_path / "google-connections.json"
+    config = {
+        "connections": {
+            "gmail": "11111111-1111-4111-8111-111111111111",
+            "calendar": "22222222-2222-4222-8222-222222222222",
+        }
+    }
+    path.write_text(json.dumps(config))
+    monkeypatch.setenv("GOOGLE_CONNECTIONS_FILE", str(path))
+    return path, config["connections"]
+
+
+def test_selects_google_account_without_credentials(google_rest, selected_connections, monkeypatch):
+    _, connections = selected_connections
+    seen = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def read(self):
+            return b"{}"
+
+    def open_request(request, **_):
+        seen.append(dict((k.lower(), v) for k, v in request.header_items()))
+        return Response()
+
+    monkeypatch.setattr(google_rest.urllib.request, "urlopen", open_request)
+    for surface, endpoint in [
+        ("gmail", "https://gmail.googleapis.com/gmail/v1/users/me/profile"),
+        ("calendar", "https://www.googleapis.com/calendar/v3/users/me/calendarList"),
+    ]:
+        google_rest.google_request("GET", endpoint)
+        assert seen[-1]["x-onecli-connection-id"] == connections[surface]
+        assert "authorization" not in seen[-1]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.googleapis.com/drive/v3/files",
+        "https://www.googleapis.com/calendar/v30/events",
+        "https://www.googleapis.com.evil.example/calendar/v3/events",
+        "http://www.googleapis.com/calendar/v3/events",
+    ],
+)
+def test_account_selection_is_limited_to_matching_api(google_rest, selected_connections, url):
+    assert google_rest.connection_headers(url) == {}
+
+
+def test_missing_selection_keeps_single_connection_behavior(google_rest, tmp_path, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CONNECTIONS_FILE", str(tmp_path / "missing.json"))
+    assert (
+        google_rest.connection_headers("https://gmail.googleapis.com/gmail/v1/users/me/profile")
+        == {}
+    )
+
+
+def test_malformed_selection_fails_without_choosing_another_account(
+    google_rest, selected_connections
+):
+    path, _ = selected_connections
+    path.write_text(json.dumps({"connections": {"calendar": "bad\r\nheader"}}))
+    with pytest.raises(ValueError, match="Invalid Google connection id"):
+        google_rest.connection_headers("https://www.googleapis.com/calendar/v3/events")

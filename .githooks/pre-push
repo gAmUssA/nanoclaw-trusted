@@ -1,0 +1,9 @@
+#!/bin/sh
+remote_url="$2"
+case "$remote_url" in
+  *github.com*jbaruch/*)
+    echo "Push rejected: Baruch remotes are fetch-only. Push to Viktor's gAmUssA fork." >&2
+    exit 1
+    ;;
+esac
+exit 0

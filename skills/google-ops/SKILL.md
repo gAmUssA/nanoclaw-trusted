@@ -16,14 +16,16 @@ Each script is a black box per `coding-policy: script-as-black-box` — the endp
 
 ## Step 1 — Read calendar events
 
-Reads the owner's calendar. Pipe a JSON object of native Calendar query params on stdin (`timeMin`/`timeMax` as `...Z` UTC, `orderBy`, etc.); empty stdin applies the defaults (`primary` calendar, `singleEvents=true`). Events come back in top-level `items`.
+Reads all configured calendars from `/workspace/global/google-connections.json` by default: Viktor's two primary calendars and the shared Family calendar. Pipe native Calendar query parameters on stdin (`timeMin`/`timeMax` as UTC timestamps, `orderBy`, etc.); `singleEvents=true` by default. Use a bounded date range. Events come back in top-level `items`, with `calendarSources` identifying their account, calendar label and native event ID.
+
+Optional `account` selects `gamussa@gmail.com` or `viktor.gamov@gmail.com`. Optional `calendarId` selects a configured calendar; a primary calendar email automatically selects its login. Omit both selectors for the combined agenda. Shared invitations appear once with all their sources; recurring instances stay separate. Pagination is automatic. The returned event `id` is a stable agenda key for state/reminders, not a native Google event ID. This skill exposes no Calendar writes. An inaccessible source fails the entire read; report the failed account rather than claiming an empty calendar.
 
 ```bash
 echo '{"timeMin": "2026-07-18T00:00:00Z", "timeMax": "2026-07-19T00:00:00Z", "orderBy": "startTime"}' \
   | python3 /home/node/.claude/skills/tessl__google-ops/scripts/google-calendar.py events-list
 ```
 
-Exit 0 with the raw Calendar resource on stdout is success. A non-zero exit prints only a stderr diagnostic and no stdout — surface the failure and stop, do not act on absent data. Finish here.
+Exit 0 with the complete Calendar agenda on stdout is success. A non-zero exit prints only a stderr diagnostic and no stdout — surface the failure and stop, do not act on absent data. Finish here.
 
 ## Step 2 — Read task lists and task status
 

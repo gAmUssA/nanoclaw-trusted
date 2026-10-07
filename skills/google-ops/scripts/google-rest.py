@@ -62,18 +62,21 @@ GOOGLE_API_BASES — JSON object remapping the per-surface base URLs. Tests
     point the surfaces at a local fixture server; production uses the
     defaults below. Unset in production.
 
-No I/O beyond the HTTP call. This file is a function library, not a
+Reads only the non-secret account-selection file in addition to the HTTP call. This file is a function library, not a
 script — there is no __main__ entry point.
 """
 
 from __future__ import annotations
 
 import io
+import hashlib
+from datetime import datetime, timezone
 import json
 import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from uuid import UUID
 
 # Per-surface API bases. These are the exact hosts OneCLI's app
 # connections are bound to — changing a host here without adding the
@@ -94,7 +97,8 @@ PER_CALL_TIMEOUT_SECONDS = 90.0
 GATEWAY_NOT_INJECTING_HINT = (
     "the OneCLI gateway is not authenticating this request. Check that the spawn "
     "carries HTTPS_PROXY + the mounted CA (src/container-runner.ts), and that the "
-    "Google app is still connected in the vault (`onecli apps list` on the NAS)"
+    "Google app has a valid connection in OneCLI (`onecli apps list`). A listed connection may still have "
+    "an expired or revoked refresh token and require Google reauthorization"
 )
 
 TIER_ACCESS_RESTRICTED_HINT = (
@@ -104,7 +108,7 @@ TIER_ACCESS_RESTRICTED_HINT = (
 
 
 class GatewayNotInjecting(RuntimeError):
-    """Google answered 401, so no Bearer reached it.
+    """Google rejected authentication, or the gateway has no usable connection.
 
     Distinct from a transient failure: the gateway is either off this
     process's request path or the app is disconnected. Retrying cannot
@@ -160,7 +164,180 @@ def _query_value(value):
     return value
 
 
-def google_request(method, url, *, params=None, body=None, timeout=PER_CALL_TIMEOUT_SECONDS):
+def connection_config():
+    """Read non-secret routing metadata; credentials stay in OneCLI."""
+    path = os.environ.get("GOOGLE_CONNECTIONS_FILE", "/workspace/global/google-connections.json")
+    try:
+        with open(path, encoding="utf-8") as stream:
+            config = json.load(stream)
+    except FileNotFoundError:
+        return {"connections": {}}
+    if not isinstance(config, dict) or not isinstance(config.get("connections"), dict):
+        raise ValueError("Google connection selection config must contain a connections object")
+    return config
+
+
+def connection_headers(url, *, account=None):
+    """Select one connection for the exact API origin/path, never by fallback."""
+    target = urllib.parse.urlsplit(url)
+    surface = None
+    for name, base in DEFAULT_API_BASES.items():
+        parsed = urllib.parse.urlsplit(base)
+        if (target.scheme, target.netloc) == (parsed.scheme, parsed.netloc) and (
+            target.path == parsed.path or target.path.startswith(parsed.path + "/")
+        ):
+            surface = name
+            break
+    if surface is None:
+        return {}
+    config = connection_config()
+    if account is not None:
+        accounts = config.get("calendar_accounts", {})
+        if surface != "calendar" or not isinstance(account, str) or account not in accounts:
+            raise ValueError(f"Unknown account for Google {surface}: {account!r}")
+        connection_id = accounts[account]
+    else:
+        connection_id = config["connections"].get(surface)
+    if connection_id is None:
+        return {}
+    if not isinstance(connection_id, str):
+        raise ValueError(f"Invalid Google connection id for {surface}")
+    try:
+        UUID(connection_id)
+    except ValueError as exc:
+        raise ValueError(f"Invalid Google connection id for {surface}") from exc
+    return {"x-onecli-connection-id": connection_id}
+
+
+class CalendarReadError(RuntimeError):
+    """An agenda is incomplete; callers must not treat it as an empty calendar."""
+
+
+def _calendar_sources(config, account, calendar_id):
+    sources = config.get("calendars")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("Google calendars must be a non-empty list")
+    accounts = config.get("calendar_accounts", {})
+    for source in sources:
+        if (not isinstance(source, dict) or source.get("account") not in accounts
+                or not isinstance(source.get("calendarId"), str) or not source["calendarId"]):
+            raise ValueError("Each calendar needs a configured account and calendarId")
+    if account is not None:
+        if not isinstance(account, str) or account not in accounts:
+            raise ValueError(f"Unknown Google Calendar account: {account!r}")
+        sources = [s for s in sources if s["account"] == account]
+    if calendar_id is not None:
+        if not isinstance(calendar_id, str):
+            raise ValueError("calendarId must be a string")
+        selected = [s for s in sources if calendar_id in (
+            s["calendarId"], s["account"] if s["calendarId"] == "primary" else s["calendarId"])]
+        if not selected and account is not None:
+            selected = [{"account": account, "calendarId": calendar_id, "label": calendar_id}]
+        sources = selected
+    if not sources:
+        raise ValueError("Calendar is not configured; specify its account and calendarId explicitly")
+    # A shared calendar may be visible through both logins; fetch it only once.
+    result, seen = [], set()
+    for source in sources:
+        actual_id = source["account"] if source["calendarId"] == "primary" else source["calendarId"]
+        if actual_id not in seen:
+            result.append({**source, "calendarId": actual_id})
+            seen.add(actual_id)
+    return result
+
+
+def _event_instant(value):
+    if not isinstance(value, dict):
+        return ""
+    stamp = value.get("dateTime")
+    if stamp:
+        instant = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if instant.tzinfo is not None:
+            return instant.astimezone(timezone.utc).isoformat()
+        return stamp
+    return value.get("date", "")
+
+
+def _calendar_event_key(event, source):
+    # UID + occurrence joins invitation copies without joining recurrence instances.
+    occurrence = _event_instant(event.get("originalStartTime") or (
+        event.get("start") if event.get("recurringEventId") else None))
+    if event.get("iCalUID"):
+        return [event["iCalUID"], occurrence]
+    return [source["account"], source["calendarId"], event.get("id"), occurrence]
+
+
+def calendar_events(params=None, *, account=None, calendar_id=None,
+                    timeout=PER_CALL_TIMEOUT_SECONDS):
+    """Read the configured agenda with account labels, paging and deduplication.
+
+    A failure in any source fails the whole read, protecting reminder sweeps from
+    interpreting an inaccessible calendar as deleted events. `id` is a stable,
+    source-aware agenda key; native Google IDs are retained in calendarSources.
+    With no multi-calendar config, preserve the legacy single-calendar response.
+    """
+    config = connection_config()
+    params = dict(params or {})
+    if account == "all":
+        account = None
+    if "calendars" not in config:
+        path = "calendars/" + urllib.parse.quote(calendar_id or "primary", safe="") + "/events"
+        kwargs = {"account": account} if account is not None else {}
+        return google_request("GET", surface_url("calendar", path), params=params,
+                              timeout=timeout, **kwargs)
+    sources = _calendar_sources(config, account, calendar_id)
+    if "pageToken" in params or "syncToken" in params:
+        raise ValueError("Combined calendar reads manage pagination; pageToken/syncToken are unsupported")
+    events = {}
+    for source in sources:
+        path = "calendars/" + urllib.parse.quote(source["calendarId"], safe="") + "/events"
+        query = {"maxResults": 2500, **params}
+        seen_tokens = set()
+        try:
+            for _ in range(100):
+                resource = google_request("GET", surface_url("calendar", path), params=query,
+                                          account=source["account"], timeout=timeout)
+                if not isinstance(resource, dict) or not isinstance(resource.get("items", []), list):
+                    raise ValueError("Malformed Calendar response")
+                for event in resource.get("items", []):
+                    if not isinstance(event, dict) or not isinstance(event.get("id"), str):
+                        raise ValueError("Calendar event is missing its id")
+                    key = "nc_" + hashlib.sha256(json.dumps(
+                        _calendar_event_key(event, source), ensure_ascii=False
+                    ).encode()).hexdigest()[:32]
+                    provenance = {**source, "eventId": event["id"]}
+                    previous = events.get(key)
+                    if previous is None:
+                        events[key] = {**event, "id": key, "calendarSources": [provenance]}
+                    else:
+                        if provenance not in previous["calendarSources"]:
+                            previous["calendarSources"].append(provenance)
+                        # An invitation accepted on one account still belongs on the agenda.
+                        def declined(item):
+                            return any(a.get("self") and a.get("responseStatus") == "declined"
+                                       for a in item.get("attendees", []))
+                        if declined(previous) and not declined(event):
+                            events[key] = {**event, "id": key,
+                                           "calendarSources": previous["calendarSources"]}
+                token = resource.get("nextPageToken")
+                if not token:
+                    break
+                if token in seen_tokens:
+                    raise ValueError("Calendar pagination repeated a page token")
+                seen_tokens.add(token)
+                query["pageToken"] = token
+            else:
+                raise ValueError("Calendar pagination exceeded 100 pages; narrow the time window")
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError,
+                GatewayNotInjecting, TierAccessRestricted) as exc:
+            raise CalendarReadError(
+                f"Calendar read failed for {source['account']} / {source.get('label', source['calendarId'])}: {exc}"
+            ) from exc
+    return {"kind": "calendar#events", "items": sorted(events.values(), key=lambda e: (
+        _event_instant(e.get("start")), e["id"])), "sources": sources}
+
+
+def google_request(method, url, *, params=None, body=None, timeout=PER_CALL_TIMEOUT_SECONDS, account=None):
     if params:
         # Google's list endpoints take repeated keys for multi-value params
         # (labelIds, fields); doseq keeps a list arg as repeats rather than
@@ -171,7 +348,7 @@ def google_request(method, url, *, params=None, body=None, timeout=PER_CALL_TIME
         url = f"{url}{'&' if '?' in url else '?'}{query}"
 
     data = None
-    headers = {"accept": "application/json"}
+    headers = {"accept": "application/json", **connection_headers(url, account=account)}
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["content-type"] = "application/json"
