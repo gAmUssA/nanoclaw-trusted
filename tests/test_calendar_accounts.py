@@ -5,6 +5,7 @@ import io
 import json
 import urllib.error
 import urllib.parse
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ SECOND = "22222222-2222-4222-8222-222222222222"
 
 def load_rest():
     spec = importlib.util.spec_from_file_location("calendar_accounts_test", REST_PATH)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -142,7 +144,7 @@ def test_failed_second_account_never_returns_partial_agenda(calendars, api):
         "https://www.googleapis.com/calendar/v3/",
         401,
         "Unauthorized",
-        {},
+        Message(),
         io.BytesIO(b'{"error":{"message":"Expired"}}'),
     )
     rest = load_rest()
@@ -213,6 +215,7 @@ def test_calendar_cli_defaults_to_complete_agenda(calendars, api, monkeypatch, c
     spec = importlib.util.spec_from_file_location(
         "calendar_cli_test", ROOT / "skills/google-ops/scripts/google-calendar.py"
     )
+    assert spec is not None and spec.loader is not None
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
     monkeypatch.setattr("sys.argv", ["google-calendar.py", "events-list"])
@@ -231,6 +234,7 @@ def test_calendar_cli_reports_failed_account_without_partial_stdout(
     spec = importlib.util.spec_from_file_location(
         "calendar_cli_test", ROOT / "skills/google-ops/scripts/google-calendar.py"
     )
+    assert spec is not None and spec.loader is not None
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
     monkeypatch.setattr("sys.argv", ["google-calendar.py", "events-list"])
