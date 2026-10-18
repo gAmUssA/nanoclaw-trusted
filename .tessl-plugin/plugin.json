@@ -34,6 +34,7 @@
     "rules/identity-dual-handle.md",
     "rules/local-context-anchoring.md",
     "rules/github-data-via-gh.md",
-    "rules/messages-db-schema.md"
+    "rules/messages-db-schema.md",
+    "rules/humanize-outbound-prose.md"
   ]
 }

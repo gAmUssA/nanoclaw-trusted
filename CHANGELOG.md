@@ -1,5 +1,9 @@
 # Changelog
 
+### Humanize email drafts before posting them (`jbaruch/nanoclaw#1019`)
+
+New always-on rule `humanize-outbound-prose`. Email drafts the agent wrote for the operator read like AI output, and the operator increasingly sends them as written. Before posting any email draft, or other prose the operator will send under their name to someone else, the agent now runs `jbaruch/blog-writer`'s humanization pass (`tessl__blog-writer`, scoped-edit route), which keeps the draft's format, language and purpose and changes wording, never facts. `jbaruch/nanoclaw#1020` installs blog-writer in the main and trusted tile baselines, the same tiers that load this plugin; this rule shipped after that deployed, so it never names a skill a container lacks. If the skill is missing anyway, the draft is posted with a line saying the pass did not run. Chat replies to the operator are out of scope, and no personal blog-writer identity is installed in containers yet, so voice calibration reports `not applicable` while the anti-pattern catalog and structural passes still run.
+
 ## 0.1.114 — 2026-09-23
 
 ### Trim skill descriptions that carry implementation detail (#965 sibling)
