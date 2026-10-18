@@ -1,5 +1,6 @@
 ---
-alwaysApply: true
+alwaysApply: false
+applyTo: "** — when drafting an email or other prose the operator will send under their name"
 ---
 
 # Humanize Outbound Prose
@@ -13,12 +14,14 @@ alwaysApply: true
 ## Required Behavior
 
 - Write the draft, then run `Skill(skill: "tessl__blog-writer")` on it as a humanization pass before posting it to the chat
-- The skill takes a non-blog artifact through its scoped-edit route: keep the draft's format, language, recipient and purpose
+- Ask the skill to humanize the existing draft, keeping its format, language, recipient and purpose
 - Post only the humanized draft, never the pre-pass draft
 - Names, dates, numbers, links, quotes and commitments stay exactly as given; the pass changes wording, never content
-- No personal identity is installed in containers, so voice calibration reports `not applicable`; the catalog and structural passes still run
 
-## When the Skill Is Missing
+## Missing Skill
 
-- `tessl__blog-writer` not installed: post the draft with one line saying the humanizer pass did not run
-- Never skip the pass silently
+- Narrow exception for a container without `tessl__blog-writer`.
+- Preconditions (all required):
+  1. The `Skill()` call fails because the skill is not installed
+  2. The posted draft carries one line saying the humanizer pass did not run
+- Every other draft runs the pass before it is posted
