@@ -83,12 +83,16 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _query_stuck_tasks(conn: sqlite3.Connection, grace_minutes: int) -> list[dict]:
+def _query_stuck_tasks(
+    conn: sqlite3.Connection, grace_minutes: int, now: datetime
+) -> list[dict]:
+    # Anchored on the run's reference time (--now-utc in tests), not
+    # SQLite's wall clock, so every window in the report shares one "now".
     rows = conn.execute(
         "SELECT id, substr(prompt, 1, 50), next_run "
         "FROM scheduled_tasks "
-        "WHERE status = 'active' AND next_run <= datetime('now', ?)",
-        (f"-{int(grace_minutes)} minutes",),
+        "WHERE status = 'active' AND next_run <= datetime(?, ?)",
+        (now.strftime("%Y-%m-%d %H:%M:%S"), f"-{int(grace_minutes)} minutes"),
     ).fetchall()
     return [
         {"id": r[0], "prompt_preview": r[1], "next_run": r[2]} for r in rows
@@ -199,7 +203,7 @@ def main() -> int:
         queries_attempted += 1
         try:
             payload["stuck_tasks"] = _query_stuck_tasks(
-                conn, args.stuck_grace_minutes
+                conn, args.stuck_grace_minutes, now
             )
             payload["stuck_count"] = len(payload["stuck_tasks"])
             queries_succeeded += 1
