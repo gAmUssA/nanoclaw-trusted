@@ -12,7 +12,7 @@ testing-standards`:
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -118,7 +118,7 @@ def test_stuck_task_crosses_grace_window(system_status_checks, monkeypatch, caps
     db = tmp_path / "messages.db"
     _build_test_db(db)
     conn = sqlite3.connect(str(db))
-    past = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+    past = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
     conn.execute(
         "INSERT INTO scheduled_tasks VALUES ('task-1', 'long prompt text here', 'active', ?)",
         (past,),
