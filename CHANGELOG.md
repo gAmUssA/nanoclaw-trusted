@@ -1,5 +1,9 @@
 # Changelog
 
+### Anchor system-status stuck-task detection on the run's reference time
+
+`system-status-checks.py` found stuck tasks with SQLite's wall clock (`datetime('now', ?)`) while the rest of the report honored `--now-utc`, and it compared the stored ISO `next_run` (`T` separator, `Z` suffix) as text against SQLite's space-separated output. A same-day overdue task therefore never counted as stuck. The query now takes the run's reference time and normalizes `next_run` with `datetime()`. Its tests pin `--now-utc`, use the stored ISO shape, and cover a task inside the grace window. Surfaced while reviewing the ruff 0.17 bump (`jbaruch/nanoclaw-trusted#112`), split out so that bump stays a focused dependency change.
+
 ## 0.1.120 — 2026-10-19
 
 ### Humanize email drafts before posting them (`jbaruch/nanoclaw#1019`)

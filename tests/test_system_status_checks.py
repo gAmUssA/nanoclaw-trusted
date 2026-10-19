@@ -12,7 +12,6 @@ testing-standards`:
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -118,7 +117,9 @@ def test_stuck_task_crosses_grace_window(system_status_checks, monkeypatch, caps
     db = tmp_path / "messages.db"
     _build_test_db(db)
     conn = sqlite3.connect(str(db))
-    past = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+    # Ten minutes before the fixed reference time, past the grace window, in
+    # the ISO shape the host stores.
+    past = "2026-07-07T11:50:00.000Z"
     conn.execute(
         "INSERT INTO scheduled_tasks VALUES ('task-1', 'long prompt text here', 'active', ?)",
         (past,),
@@ -126,12 +127,36 @@ def test_stuck_task_crosses_grace_window(system_status_checks, monkeypatch, caps
     conn.commit()
     conn.close()
 
-    code, out, _ = _run(system_status_checks, monkeypatch, capsys, "--db", str(db))
+    code, out, _ = _run(
+        system_status_checks, monkeypatch, capsys, "--db", str(db), "--now-utc", REF_NOW
+    )
     payload = json.loads(out)
     assert code == 0
     assert payload["stuck_count"] == 1
     assert payload["stuck_tasks"][0]["id"] == "task-1"
     assert any("stuck tasks: 1" in a for a in payload["alerts"])
+
+
+def test_stuck_window_is_anchored_on_the_reference_time(
+    system_status_checks, monkeypatch, capsys, tmp_path
+):
+    """A task due inside the grace window before --now-utc is not stuck, however
+    far behind the wall clock that reference time is."""
+    db = tmp_path / "messages.db"
+    _build_test_db(db)
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO scheduled_tasks VALUES "
+        "('task-2', 'prompt', 'active', '2026-07-07T11:58:00.000Z')"
+    )
+    conn.commit()
+    conn.close()
+
+    code, out, _ = _run(
+        system_status_checks, monkeypatch, capsys, "--db", str(db), "--now-utc", REF_NOW
+    )
+    assert code == 0
+    assert json.loads(out)["stuck_count"] == 0
 
 
 def test_recent_task_failure_within_24h(system_status_checks, monkeypatch, capsys, tmp_path):
