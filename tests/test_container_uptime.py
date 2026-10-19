@@ -38,7 +38,7 @@ def container_uptime():
 # deterministic — no self-generated random test data").
 FIXED_DOCKERENV_EPOCH = 1_700_000_000  # 2023-11-14T22:13:20Z
 FIXED_NOW = datetime.datetime(
-    2023, 11, 16, 22, 13, 20, tzinfo=datetime.timezone.utc
+    2023, 11, 16, 22, 13, 20, tzinfo=datetime.UTC
 )  # exactly 2 days, 0 hours later
 
 
