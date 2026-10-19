@@ -88,12 +88,10 @@ def _query_stuck_tasks(
 ) -> list[dict]:
     # Anchored on the run's reference time (--now-utc in tests), not
     # SQLite's wall clock, so every window in the report shares one "now".
-    # `next_run` is stored ISO (`T` / `Z`); datetime() normalizes it, since a
-    # text comparison against the space-separated form misses same-day rows.
     rows = conn.execute(
         "SELECT id, substr(prompt, 1, 50), next_run "
         "FROM scheduled_tasks "
-        "WHERE status = 'active' AND datetime(next_run) <= datetime(?, ?)",
+        "WHERE status = 'active' AND next_run <= datetime(?, ?)",
         (now.strftime("%Y-%m-%d %H:%M:%S"), f"-{int(grace_minutes)} minutes"),
     ).fetchall()
     return [

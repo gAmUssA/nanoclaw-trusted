@@ -117,9 +117,8 @@ def test_stuck_task_crosses_grace_window(system_status_checks, monkeypatch, caps
     db = tmp_path / "messages.db"
     _build_test_db(db)
     conn = sqlite3.connect(str(db))
-    # Ten minutes before the fixed reference time, past the grace window, in
-    # the ISO shape the host stores.
-    past = "2026-07-07T11:50:00.000Z"
+    # Ten minutes before the fixed reference time, past the grace window.
+    past = "2026-07-07 11:50:00"
     conn.execute(
         "INSERT INTO scheduled_tasks VALUES ('task-1', 'long prompt text here', 'active', ?)",
         (past,),
@@ -146,8 +145,7 @@ def test_stuck_window_is_anchored_on_the_reference_time(
     _build_test_db(db)
     conn = sqlite3.connect(str(db))
     conn.execute(
-        "INSERT INTO scheduled_tasks VALUES "
-        "('task-2', 'prompt', 'active', '2026-07-07T11:58:00.000Z')"
+        "INSERT INTO scheduled_tasks VALUES ('task-2', 'prompt', 'active', '2026-07-07 11:58:00')"
     )
     conn.commit()
     conn.close()
