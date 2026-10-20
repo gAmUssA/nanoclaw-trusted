@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.121 — 2026-10-19
+
+### Anchor system-status stuck-task detection on the run's reference time
+
+`system-status-checks.py` found stuck tasks with SQLite's wall clock (`datetime('now', ?)`) while the rest of the report honored `--now-utc`, and it compared the stored ISO `next_run` (`T` separator, `Z` suffix) as text against SQLite's space-separated output. A same-day overdue task therefore never counted as stuck. The query now takes the run's reference time and normalizes `next_run` with `datetime()`. Its tests pin `--now-utc`, use the stored ISO shape, and cover a task inside the grace window. Surfaced while reviewing the ruff 0.17 bump (`jbaruch/nanoclaw-trusted#112`), split out so that bump stays a focused dependency change.
+
+## 0.1.120 — 2026-10-19
+
+### Humanize email drafts before posting them (`jbaruch/nanoclaw#1019`)
+
+New conditional rule `humanize-outbound-prose`, scoped to drafting prose the operator will send under their name. Email drafts the agent wrote for the operator read like AI output, and the operator increasingly sends them as written. Before posting any email draft, or other prose the operator will send under their name to someone else, the agent now runs `jbaruch/blog-writer`'s humanization pass (`tessl__blog-writer`) on it, keeping the draft's format, language and purpose and changing wording, never facts. blog-writer's scoped-edit route already treats an email as its own artifact; the rule names only the typed skill call and leaves that routing to the skill. `jbaruch/nanoclaw#1020` installs blog-writer in the main and trusted tile baselines, the same tiers that load this plugin; this rule shipped after that deployed, so it never names a skill a container lacks. If the skill is missing anyway, the draft is posted with a line saying the pass did not run. `tessl.json` declares `jbaruch/blog-writer` at `latest`, as every `jbaruch/*` dependency floats, so the plugin this rule calls is a declared dependency of the repo. Chat replies to the operator are out of scope, and no personal blog-writer identity is installed in containers yet, so voice calibration reports `not applicable` while the anti-pattern catalog and structural passes still run.
+
+## 0.1.114 — 2026-09-23
+
+### Trim skill descriptions that carry implementation detail (#965 sibling)
+
+`google-ops` 509→266 B and `trusted-memory` 542→498 B. The skill listing rides the prompt on every interactive turn while SKILL.md bodies load only on invocation, so script invocation syntax and file manifests cost bytes every turn and buy nothing at discovery time. `google-ops` loses the `google-calendar.py` / `google-tasks.py` command forms and the Bearer-injection note from its description; both are already documented in the skill body. Trigger phrasing is unchanged.
+
 ## 0.1.110 — 2026-08-28
 
 ### Re-derive `docs/skill-execution-order.md` from what ships today (`#100`)
