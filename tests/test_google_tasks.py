@@ -301,3 +301,17 @@ def test_non_object_stdin_exits_2(tasks_api, monkeypatch, capsys):
     assert rc == 2
     assert "invalid stdin" in capsys.readouterr().err
     assert tasks_api.requests_seen == []
+
+
+@pytest.mark.parametrize("op,args", [("list-tasklists", {}), ("list", {"tasklist_id": "@default"})])
+def test_partial_response_keeps_pagination_token(tasks_api, monkeypatch, capsys, op, args):
+    tasks_api.response_pages = [
+        {"items": [{"id": "one"}], "nextPageToken": "next"},
+        {"items": [{"id": "two"}]},
+    ]
+    assert _run(monkeypatch, op, {**args, "fields": "items(id,title)"}) == 0
+    assert [row["id"] for row in json.loads(capsys.readouterr().out)["items"]] == ["one", "two"]
+    assert all(
+        request["query"]["fields"] == ["items(id,title),nextPageToken"]
+        for request in tasks_api.requests_seen
+    )
