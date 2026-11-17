@@ -56,7 +56,7 @@ def test_installed_ground_truth_retains_trigger_and_directives(installed_context
         "Calendar/Tasks scripts ship on main and trusted without admin co-loading",
         "Trusted access is read-only",
         "Sanitizing Gmail-fetch ships in admin, baseline on main only",
-        "Trusted non-main has no email-verification path",
+        "Trusted non-main has no Gmail-verification path",
         "never raw-fetch",
         "On `access_restricted`, report the claim unverified",
         "do not assert it or try another route",

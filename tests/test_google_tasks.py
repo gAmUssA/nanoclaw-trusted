@@ -304,12 +304,13 @@ def test_non_object_stdin_exits_2(tasks_api, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("op,args", [("list-tasklists", {}), ("list", {"tasklist_id": "@default"})])
-def test_partial_response_keeps_pagination_token(tasks_api, monkeypatch, capsys, op, args):
+@pytest.mark.parametrize("fields", ["items(id,title)", ["items(id,title)"]])
+def test_partial_response_keeps_pagination_token(tasks_api, monkeypatch, capsys, op, args, fields):
     tasks_api.response_pages = [
         {"items": [{"id": "one"}], "nextPageToken": "next"},
         {"items": [{"id": "two"}]},
     ]
-    assert _run(monkeypatch, op, {**args, "fields": "items(id,title)"}) == 0
+    assert _run(monkeypatch, op, {**args, "fields": fields}) == 0
     assert [row["id"] for row in json.loads(capsys.readouterr().out)["items"]] == ["one", "two"]
     assert all(
         request["query"]["fields"] == ["items(id,title),nextPageToken"]

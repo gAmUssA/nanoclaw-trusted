@@ -7,7 +7,7 @@ The runtime mount layout is authoritative. Follow `container-trust-levels` for E
 - Read/write group folder and `/workspace/trusted/` shared memory.
 - Baseline plugins: core, trusted, and blog-writer; main also receives admin. Group configuration may add plugins; skill/rule blocklists may filter them.
 - Calendar and Tasks read scripts ship in this plugin's `google-ops` skill on both main and trusted. The OneCLI gateway injects Google authorization; no container credential fallback is permitted.
-- Sanitizing Gmail-fetch skills ship in admin, baseline on main only. Trusted non-main has no email-verification path under the loaded boundary.
+- Sanitizing Gmail-fetch skills ship in admin, baseline on main only. Trusted non-main has no Gmail-verification path under the loaded boundary.
 - Host script execution and auto-memory are enabled.
 - The host mounts `/workspace/store` writable for main/trusted; mount writability does not authorize reader mutations. See [messages-db-schema.md](messages-db-schema.md#shipped-readers) for the shipped reader contracts.
 - Spawn limits: 1536 MB RAM, 2048 MB memory plus swap. No CPU cap is set by this tier branch.
@@ -30,3 +30,5 @@ Evidence pinned to `jbaruch/nanoclaw` commit `ef8cf4d6837427f8924deda83b7af00c21
 - [src/config.ts](https://github.com/jbaruch/nanoclaw/blob/ef8cf4d6837427f8924deda83b7af00c215996fc/src/config.ts#L205): default `IDLE_TIMEOUT` is 1800000 ms (30 minutes). Inspect effective runtime configuration rather than assuming a tier-specific idle timeout.
 
 Check the running host revision and update this reference alongside changes to these sources.
+
+Zoho mail verification remains available through the installed read-only `zoho-mail` skill on main and trusted. Keep Zoho and Gmail mailbox results separate; this grants no mail-writing capability.

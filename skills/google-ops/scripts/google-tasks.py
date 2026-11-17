@@ -127,8 +127,14 @@ def _endpoint(op, args):
 def _fetch(google_rest, method, path, args, *, paged):
     """Call the endpoint; for a list op, follow `nextPageToken` and merge
     every page's `items` into the first page's resource."""
-    if paged and isinstance(args.get("fields"), str) and args["fields"].strip():
-        args = {**args, "fields": args["fields"] + ",nextPageToken"}
+    if paged:
+        fields = args.get("fields")
+        if isinstance(fields, list):
+            if not all(isinstance(field, str) for field in fields):
+                raise ValueError("fields must contain strings")
+            fields = ",".join(fields)
+        if isinstance(fields, str) and fields.strip():
+            args = {**args, "fields": fields + ",nextPageToken"}
     url = google_rest.surface_url("tasks", path)
     resource = google_rest.google_request(method, url, params=args or None)
     if not paged:
