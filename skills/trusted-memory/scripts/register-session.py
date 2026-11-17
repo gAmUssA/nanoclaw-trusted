@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Write session metadata into session-state.json and mark bootstrap done.
+"""Write session metadata and optionally mark a completed bootstrap.
 
 Usage:
-    register-session.py
+    register-session.py [--registration-only]
+
+Scheduled wakes pass --registration-only after the task skill. This updates
+session metadata without reading or writing the bootstrap sentinel.
 
 Reads:
-    - Session ID from `/workspace/store/messages.db` (`sessions` table,
-      first row). Falls back to `None` when the table is empty.
+    - Session ID from `/workspace/store/messages.db`, opened read-only.
       `sessions` is keyed by (`group_folder`, `session_name`) — see
-      `rules/messages-db-schema.md`; the single-row assumption behind
-      "first row" is documented at the query site below.
-    - Session name from `$NANOCLAW_SESSION_NAME` (defaults to `default`).
-    - Current session ID from `$CLAUDE_SESSION_ID` (for the bootstrap
-      sentinel).
+      `/home/node/.claude/skills/tessl__system-status/references/messages-db-schema.md`.
+    - `$NANOCLAW_GROUP_FOLDER` and `$NANOCLAW_SESSION_NAME` must both be
+      nonempty for the database lookup. Missing identity, no matching row,
+      or SQLite errors yield `None` with an actionable stderr diagnostic.
+      The output state entry defaults to `default` if the session name is unset.
+    - Current bootstrap session ID from `session_identity.py`; the lookup
+      contract is in `state-schema.md`.
 
 Writes (both atomically, tempfile + fsync + os.replace):
     - `/workspace/group/session-state.json` — updates
@@ -20,24 +24,23 @@ Writes (both atomically, tempfile + fsync + os.replace):
       last_seen}` and mirrors `session_id` at the top level for
       back-compat.
     - `/tmp/session_bootstrapped` — sentinel containing the current
-      CLAUDE_SESSION_ID so `needs-bootstrap.py` reports "done" on
-      subsequent runs. NOT written when CLAUDE_SESSION_ID is missing
+      resolved Claude session ID so `needs-bootstrap.py` reports "done" on
+      subsequent runs. Left untouched with --registration-only. NOT written
+      when both identity variables are missing
       or empty — an empty sentinel would match an empty env on the
       next run and cause bootstrap to be skipped forever.
 
 Exit codes:
     0 — success (state written; sentinel skipped is still success
-        when CLAUDE_SESSION_ID is empty/unset, with a stderr note)
+        with --registration-only, or when the resolved identity is empty
+        with a stderr note)
     1 — state file read/write failure
+    2 — invalid command-line arguments
 
-Note on sqlite behavior: the previous inline block would have raised
-on a missing messages.db or missing `sessions` table. This script
-intentionally catches `sqlite3.Error` broadly and treats it as
-`session_id=None` with a stderr note — a deliberate relaxation,
-not a behavior-preserving port, because bootstrap shouldn't hard-
-crash the whole memory-load flow when the DB is temporarily
-unreadable (locked, early-boot, etc.). The back-compat mirror still
-records `None`, which downstream consumers tolerate.
+Database lookup failure does not abort memory bootstrap. State and the
+back-compat mirror record `None`; successful writes and the sentinel
+confirm bootstrap completion, not database availability. Never create or
+repair the runtime-owned database here.
 
 Concurrency: state-file writes use an fcntl.LOCK_EX on
 `<STATE_PATH>.lock` around the read-modify-write cycle. Other
@@ -45,6 +48,7 @@ writers on this file must take the same lock; without coordination
 a concurrent update can clobber this script's `sessions.<name>`
 write.
 """
+import argparse
 import fcntl
 import json
 import os
@@ -64,6 +68,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from memory_write import write_atomic  # noqa: E402
+from session_identity import current_session_id  # noqa: E402
 
 # messages.db can be locked by the orchestrator's writer during bootstrap;
 # without a timeout sqlite3.connect waits forever. 10s keeps the bootstrap
@@ -85,26 +90,42 @@ STATE_SCHEMA_VERSION = 1
 
 
 def read_session_id_from_db() -> Optional[str]:
+    group_folder = os.environ.get("NANOCLAW_GROUP_FOLDER")
+    session_name = os.environ.get("NANOCLAW_SESSION_NAME")
+    if not group_folder or not session_name:
+        print(
+            "register-session: session_id unavailable; NANOCLAW_GROUP_FOLDER and "
+            "NANOCLAW_SESSION_NAME must both be nonempty. Run through the host runtime "
+            "so it supplies the group and session identity.",
+            file=sys.stderr,
+        )
+        return None
     try:
-        conn = sqlite3.connect(MESSAGES_DB, timeout=MESSAGES_DB_TIMEOUT_SECONDS)
+        conn = sqlite3.connect(
+            Path(MESSAGES_DB).resolve().as_uri() + "?mode=ro",
+            uri=True,
+            timeout=MESSAGES_DB_TIMEOUT_SECONDS,
+        )
         try:
-            # `sessions` is keyed by (group_folder, session_name), one
-            # row per group session (rules/messages-db-schema.md). The
-            # host currently writes a single row — the main group's
-            # session, which is the container this script runs in — so
-            # a bare LIMIT 1 is deterministic today. If the host starts
-            # registering sessions for other groups, this query must
-            # gain a WHERE on this container's group_folder; there is
-            # no container-side way to derive that folder name yet.
             row = conn.execute(
-                "SELECT session_id FROM sessions LIMIT 1"
+                "SELECT session_id FROM sessions WHERE group_folder = ? AND session_name = ?",
+                (group_folder, session_name),
             ).fetchone()
         finally:
             conn.close()
-        return row[0] if row else None
+        if row:
+            return row[0]
+        print(
+            f"register-session: session_id unavailable for group {group_folder!r}, "
+            f"session {session_name!r} in {MESSAGES_DB}. "
+            "Check the host sessions registration for this identity.",
+            file=sys.stderr,
+        )
+        return None
     except sqlite3.Error as e:
         print(
-            f"register-session: cannot read session_id from {MESSAGES_DB}: {e}",
+            f"register-session: session_id unavailable from {MESSAGES_DB}: {e}. "
+            "Check the host messages.db mount and sessions schema; do not create a replacement.",
             file=sys.stderr,
         )
         return None
@@ -119,10 +140,17 @@ def atomic_write_json(path: str, data: dict) -> None:
     write_atomic(Path(path), json.dumps(data, indent=2))
 
 
-def main() -> None:
+def main(argv: Optional[list[str]] = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--registration-only",
+        action="store_true",
+        help="Update session metadata without marking bootstrap complete",
+    )
+    args = parser.parse_args(argv)
     session_id = read_session_id_from_db()
     session_name = os.environ.get("NANOCLAW_SESSION_NAME", "default")
-    claude_session_id = os.environ.get("CLAUDE_SESSION_ID", "")
+    claude_session_id = current_session_id()
 
     # Hold LOCK_EX on STATE_LOCK_PATH for the entire read-modify-write
     # cycle. Other writers on this file must use the same lock; without
@@ -205,15 +233,16 @@ def main() -> None:
         # Closing the fd releases the flock; no explicit LOCK_UN needed.
         lock_f.close()
 
-    # Refuse to write an empty sentinel. An empty string would match the
-    # default `$CLAUDE_SESSION_ID` fallback in needs-bootstrap.py
-    # (`os.environ.get(..., "")`), so a subsequent run would read an
-    # empty sentinel, see an empty current session, and incorrectly
-    # decide bootstrap was already done — permanently skipping memory
-    # load for every future session until the file is removed.
+    if args.registration_only:
+        emit_status(session_id, session_name, wrote_sentinel=False)
+        return
+
+    # Both callers use one resolver. Missing identity must leave bootstrap
+    # required instead of stamping an empty sentinel that could match forever.
     if not claude_session_id:
         print(
-            "register-session: $CLAUDE_SESSION_ID missing/empty; skipping sentinel write so next run re-bootstraps",
+            "register-session: set CLAUDE_SESSION_ID or use Claude Code's CLAUDE_CODE_SESSION_ID; "
+            "both are missing/empty, so the sentinel is skipped and the next run re-bootstraps",
             file=sys.stderr,
         )
         emit_status(session_id, session_name, wrote_sentinel=False)

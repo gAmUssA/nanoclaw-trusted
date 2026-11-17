@@ -32,7 +32,7 @@ Mutable JSON object. Per-group, not shared across containers.
 |---|---|---|---|
 | `schema_version` | `register-session.py` (owner) | All readers gate on this | See Schema versioning below |
 | `sessions.<name>.*` | `register-session.py` (owner) — own session's subtree | All readers may inspect any session | `last_seen` may be stamped by `tessl__heartbeat` for `maintenance` |
-| `session_id` (top-level) | `register-session.py` — both sessions on bootstrap | Legacy readers only | Back-compat; last-writer-wins is accepted |
+| `session_id` (top-level) | `register-session.py` — interactive bootstrap or scheduled registration | Legacy readers only | Back-compat; last-writer-wins is accepted |
 | `pending_response` | `default` session writes on inbound start; `default` clears on send; `maintenance` heartbeat clears stale entries | All trusted/main sessions | The `pending-response-tracking` rule governs the protocol |
 | `seen_email_ids` | `tessl__check-email`, `tessl__heartbeat`, `tessl__morning-brief`, `tessl__nightly` (all `maintenance`) | `tessl__check-email` for de-dup | Append-only within a window |
 | `muted_threads` | `default` session | `default` + `maintenance` | Per-thread mute map |
@@ -43,9 +43,13 @@ Mutable JSON object. Per-group, not shared across containers.
 
 ### `/tmp/session_bootstrapped`
 
-Plain-text sentinel. One line: the value of `$CLAUDE_SESSION_ID` from the run that completed bootstrap.
+Plain-text sentinel. One line: the resolved current Claude session ID from the run that completed bootstrap. The shared `scripts/session_identity.py` resolver uses nonempty `CLAUDE_SESSION_ID` first, then nonempty `CLAUDE_CODE_SESSION_ID`; both sentinel scripts use this resolver.
 
-`needs-bootstrap.py` compares this file's contents to the current `$CLAUDE_SESSION_ID`. Mismatch (or missing file) → bootstrap is needed. `register-session.py` REFUSES to write an empty sentinel because an empty value would match an empty env var on the next run and permanently suppress bootstrap.
+`needs-bootstrap.py` compares this file's contents to the resolved current identity. Mismatch (or missing file) → bootstrap is needed. `register-session.py` REFUSES to write an empty sentinel when neither variable supplies an identity. The state format is unchanged.
+
+Scheduled wakes invoke `register-session.py --registration-only`: it updates `session-state.json`, leaves any existing sentinel untouched, and emits `wrote_sentinel: false`. Interactive bootstrap uses the invocation without that flag after completing the reads. Registration alone never records bootstrap completion.
+
+Claude Code [sets `CLAUDE_CODE_SESSION_ID` for Bash and hook subprocesses](https://code.claude.com/docs/en/env-vars#environment-variables): it matches the hook session identity, changes on `/clear`, and uses the resumed ID for an explicit `--resume <session-id>`. A changed identity triggers bootstrap again; repeated calls with the same identity skip it.
 
 ## Schema versioning
 
@@ -53,7 +57,7 @@ Plain-text sentinel. One line: the value of `$CLAUDE_SESSION_ID` from the run th
 
 Reader skills (`jbaruch/nanoclaw-admin: tessl__heartbeat`, `jbaruch/nanoclaw-admin: tessl__check-email`) MUST treat an unknown future version (`schema_version > 1`) as "no usable prior state" and let the next `register-session.py` run perform the upgrade — never migrate from a reader.
 
-`/tmp/session_bootstrapped` is a single-line plain-text sentinel; it has no envelope shape to version. The only behavioral contract is "non-empty content = bootstrap was completed for this `$CLAUDE_SESSION_ID`", and that contract is stable.
+`/tmp/session_bootstrapped` is a single-line plain-text sentinel; it has no envelope shape to version. Nonempty content means bootstrap completed for that resolved current session identity. The file shape is unchanged.
 
 ## `/workspace/trusted/user_profile.md` — `## Addresses` block
 
@@ -100,7 +104,7 @@ Additive: the block gains the optional `home_metro` key. `jbaruch/nanoclaw-trave
 
 `home_metro` has **no default value** — it is absent until the operator names a metro, and absent means no trip is treated as local, which is the pre-v2 behaviour. That is what makes the travel-side reader dual-accept without a code change: it reads a v1 block as a v2 block whose `home_metro` is unset.
 
-**Owner-side migration (owner only, never a reader).** `skills/trusted-memory/scripts/migrate-addresses-block.py` performs it — see its top-of-file docstring for what it reads, writes, emits, and refuses. `SKILL.md` Step 4 invokes it, and Step 1 (Bootstrap) reaches Step 4 every session, so the block migrates when the owner READS it rather than whenever someone next happens to edit the profile. Step 3 reaches it again after any write to `user_profile.md`.
+**Owner-side migration (owner only, never a reader).** `skills/trusted-memory/scripts/migrate-addresses-block.py` performs it — see its top-of-file docstring for what it reads, writes, emits, and refuses. `SKILL.md` Step 4 invokes it, and Step 1 (Bootstrap) reaches Step 4 after interactive bootstrap reads, so the block migrates when the owner READS it rather than whenever someone next happens to edit the profile. Step 3 reaches it again after any write to `user_profile.md`.
 
 Two contracts this schema owns rather than the script: no migration adds a `home_metro` line, because the key has no default; and migrating to a version is legal only once a reader accepting it is deployed, per the order above — `jbaruch/nanoclaw-travel@0.2.116` satisfies that for v2. A reader that finds a v1 block never rewrites it: it reads it as v1 and waits for the owner.
 

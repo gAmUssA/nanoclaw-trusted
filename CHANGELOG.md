@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.1.134 — 2026-11-17
+
+- chore(deps-dev): bump ruff from 0.17.3 to 0.17.4 (#126)
+
+## 0.1.133 — 2026-11-17
+
+- docs(rules): merge duplicate trusted rules; schema to reference (#129)
+
+## 0.1.132 — 2026-11-15
+
+- fix(trusted-memory): skip the bootstrap on scheduled wakes (#130)
+
+## 0.1.131 — 2026-11-15
+
+- chore: refresh the Tessl-generated ignore block (#131)
+
+## 0.1.130 — 2026-11-09
+
+### Abstracts go through cfp-abstract as one text (#124)
+
+`rules/humanize-outbound-prose.md` now covers a talk abstract or session description he rewrites or publishes, another speaker's included: run `tessl__cfp-abstract` before the blog-writer pass, keep the other speaker's facts and claims, and write one abstract text even when the form splits Summary and Description. On 2026-11-06 a PortCon abstract went through five versions without cfp-abstract and came back as Summary + Description.
+
+## 0.1.129 — 2026-11-08
+
+### Return every page from the Tasks list reads (#122)
+
+`google-tasks.py list` and `list-tasklists` returned only Google's first page (20 tasks by default) and never followed `nextPageToken`. On 2026-11-08 My Tasks held 32 tasks, so 12 never reached the morning brief, including an overdue one. Both list ops now follow `nextPageToken` and print one resource with all `items` and no token. The output shape is unchanged for lists that fit on one page.
+
+## 0.1.125 — 2026-10-21
+
+### Reuse the current Claude Code session for memory bootstrap (#117)
+
+The sentinel reader and writer now share one identity resolver: explicit legacy session IDs retain precedence, with Claude Code's current session ID as fallback. Repeated calls in one session skip bootstrap, and a changed or missing identity still requires it. The sentinel and session-state formats stay unchanged.
+
 ## 0.1.121 — 2026-10-19
 
 ### Anchor system-status stuck-task detection on the run's reference time
